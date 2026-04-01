@@ -181,6 +181,9 @@ def _normalize_email_service_config(
     elif service_type == EmailServiceType.CLOUD_MAIL:
         if 'default_domain' in normalized and 'domain' not in normalized:
             normalized['domain'] = normalized.pop('default_domain')
+    elif service_type == EmailServiceType.FREEMAIL:
+        if 'adminToken' in normalized and 'admin_token' not in normalized:
+            normalized['admin_token'] = normalized.pop('adminToken')
 
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
@@ -1317,6 +1320,11 @@ async def get_available_email_services():
             "available": False,
             "count": 0,
             "services": []
+        },
+        "freemail": {
+            "available": False,
+            "count": 0,
+            "services": []
         }
     }
 
@@ -1346,6 +1354,24 @@ async def get_available_email_services():
 
         result["cloud_mail"]["count"] = len(cloud_mail_services)
         result["cloud_mail"]["available"] = len(cloud_mail_services) > 0
+
+        freemail_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "freemail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in freemail_services:
+            config = service.config or {}
+            result["freemail"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "freemail",
+                "domain": config.get("domain"),
+                "priority": service.priority
+            })
+
+        result["freemail"]["count"] = len(freemail_services)
+        result["freemail"]["available"] = len(freemail_services) > 0
 
     return result
 

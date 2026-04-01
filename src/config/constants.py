@@ -34,6 +34,7 @@ class EmailServiceType(str, Enum):
     """邮箱服务类型"""
     TEMPMAIL = "tempmail"
     CLOUD_MAIL = "cloud_mail"
+    FREEMAIL = "freemail"
 
 
 # ============================================================================
@@ -104,6 +105,14 @@ EMAIL_SERVICE_DEFAULTS = {
         "domain": "",
         "timeout": 30,
         "max_retries": 3,
+    },
+    "freemail": {
+        "base_url": "",
+        "admin_token": "",
+        "domain": "",
+        "timeout": 30,
+        "poll_interval": 3,
+        "mail_limit": 20,
     }
 }
 

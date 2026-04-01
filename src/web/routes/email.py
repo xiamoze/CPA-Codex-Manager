@@ -68,7 +68,7 @@ class ServiceTestResult(BaseModel):
 # ============== Helper Functions ==============
 
 # 敏感字段列表，返回响应时需要过滤
-SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token'}
+SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token', 'admin_password'}
 
 def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤敏感配置信息"""
@@ -107,6 +107,21 @@ def _delete_service_with_dependencies(db, service: EmailServiceModel) -> None:
         RegistrationTask.email_service_id == service.id
     ).delete(synchronize_session=False)
     db.delete(service)
+
+
+def validate_service_config(service_type: EmailServiceType, config: Dict[str, Any]) -> Dict[str, Any]:
+    service_config = dict(config or {})
+    if service_type == EmailServiceType.CLOUD_MAIL:
+        required = ["base_url", "admin_email", "admin_password"]
+    elif service_type == EmailServiceType.FREEMAIL:
+        required = ["base_url", "admin_token"]
+    else:
+        return service_config
+
+    missing = [key for key in required if not service_config.get(key)]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"缺少必需配置: {', '.join(missing)}")
+    return service_config
 
 
 # ============== API Endpoints ==============
@@ -284,9 +299,11 @@ async def create_email_service(request: EmailServiceCreate):
     """创建邮箱服务配置"""
     # 验证服务类型
     try:
-        EmailServiceType(request.service_type)
+        service_type = EmailServiceType(request.service_type)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"无效的服务类型: {request.service_type}")
+
+    validated_config = validate_service_config(service_type, request.config)
 
     with get_db() as db:
         # 检查名称是否重复
@@ -297,7 +314,7 @@ async def create_email_service(request: EmailServiceCreate):
         service = EmailServiceModel(
             service_type=request.service_type,
             name=request.name,
-            config=request.config,
+            config=validated_config,
             enabled=request.enabled,
             priority=request.priority
         )
@@ -325,6 +342,8 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             merged_config = {**current_config, **request.config}
             # 移除空值
             merged_config = {k: v for k, v in merged_config.items() if v}
+            service_type = EmailServiceType(service.service_type)
+            merged_config = validate_service_config(service_type, merged_config)
             update_data["config"] = merged_config
         if request.enabled is not None:
             update_data["enabled"] = request.enabled

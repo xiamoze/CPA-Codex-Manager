@@ -300,7 +300,8 @@ function openEmailServiceModal() {
 
     // 其他服务
     const otherServices = [
-        { key: 'cloud_mail', name: 'CloudMail', desc: 'Cloudflare Email 路由', icon: '🌫️' }
+        { key: 'cloud_mail', name: 'CloudMail', desc: 'Cloudflare Email 路由', icon: '🌫️' },
+        { key: 'freemail', name: 'Freemail', desc: 'Cloudflare Workers 临时邮箱', icon: '📬' }
     ];
 
     otherServices.forEach(os => {

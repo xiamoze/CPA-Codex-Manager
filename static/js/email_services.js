@@ -31,6 +31,7 @@ const elements = {
     cancelAddCustom: document.getElementById('cancel-add-custom'),
     customSubType: document.getElementById('custom-sub-type'),
     addCloudmailFields: document.getElementById('add-cloudmail-fields'),
+    addFreemailFields: document.getElementById('add-freemail-fields'),
 
     // 编辑自定义域名模态框
     editCustomModal: document.getElementById('edit-custom-modal'),
@@ -48,10 +49,27 @@ const elements = {
 };
 
 const CUSTOM_SUBTYPE_LABELS = {
+    freemail: '📬 Freemail（Cloudflare Workers 临时邮箱）',
     cloudmail: '☁️ CloudMail（Cloudflare Workers 邮箱）',
 };
 
 const ADD_SUBTYPE_FIELDS_HTML = {
+    freemail: `
+        <div id="add-freemail-fields">
+            <div class="form-group">
+                <label for="add-fm-base-url">服务地址</label>
+                <input type="text" id="add-fm-base-url" name="fm_base_url" placeholder="https://your-freemail.example.com">
+            </div>
+            <div class="form-group">
+                <label for="add-fm-admin-token">管理员 Token</label>
+                <input type="text" id="add-fm-admin-token" name="fm_admin_token" placeholder="请输入 JWT_TOKEN">
+            </div>
+            <div class="form-group">
+                <label for="add-fm-domain">域名</label>
+                <input type="text" id="add-fm-domain" name="fm_domain" placeholder="example.com">
+            </div>
+        </div>
+    `,
     cloudmail: `
         <div id="add-cloudmail-fields">
             <div class="form-group">
@@ -82,6 +100,7 @@ function ensureAddCustomFieldsRendered() {
     const container = document.getElementById('add-fields-container');
     if (!container || container.children.length > 0) return;
     container.innerHTML = Object.values(ADD_SUBTYPE_FIELDS_HTML).join('');
+    elements.addFreemailFields = document.getElementById('add-freemail-fields');
     elements.addCloudmailFields = document.getElementById('add-cloudmail-fields');
 }
 
@@ -111,7 +130,7 @@ function initEventListeners() {
     bindIfPresent(elements.addCustomBtn, 'click', () => {
         elements.addCustomForm.reset();
         ensureAddCustomFieldsRendered();
-        switchAddSubType('cloudmail');
+        switchAddSubType('freemail');
         elements.addCustomModal.classList.add('active');
     });
     bindIfPresent(elements.closeCustomModal, 'click', () => elements.addCustomModal.classList.remove('active'));
@@ -151,8 +170,9 @@ function closeEmailMoreMenu(el) {
 // 切换添加表单子类型
 function switchAddSubType(subType) {
     ensureAddCustomFieldsRendered();
-    if (elements.customSubType) elements.customSubType.value = 'cloudmail';
-    if (elements.addCloudmailFields) elements.addCloudmailFields.style.display = '';
+    if (elements.customSubType) elements.customSubType.value = subType;
+    if (elements.addFreemailFields) elements.addFreemailFields.style.display = subType === 'freemail' ? '' : 'none';
+    if (elements.addCloudmailFields) elements.addCloudmailFields.style.display = subType === 'cloudmail' ? '' : 'none';
 }
 
 // 切换编辑表单子类型显示
@@ -303,18 +323,31 @@ async function loadTempmailConfig() {
 async function handleAddCustom(e) {
     e.preventDefault();
     const formData = new FormData(e.target);
-    const serviceType = 'cloud_mail';
-    const domainInput = formData.get('cm_domain');
-    let domain = domainInput;
-    if (domainInput && domainInput.includes(',')) {
-        domain = domainInput.split(',').map(d => d.trim()).filter(d => d);
+    const subType = formData.get('sub_type') || 'freemail';
+    let serviceType = '';
+    let config = {};
+
+    if (subType === 'freemail') {
+        serviceType = 'freemail';
+        config = {
+            base_url: formData.get('fm_base_url'),
+            admin_token: formData.get('fm_admin_token'),
+            domain: formData.get('fm_domain')
+        };
+    } else {
+        serviceType = 'cloud_mail';
+        const domainInput = formData.get('cm_domain');
+        let domain = domainInput;
+        if (domainInput && domainInput.includes(',')) {
+            domain = domainInput.split(',').map(d => d.trim()).filter(d => d);
+        }
+        config = {
+            base_url: formData.get('cm_base_url'),
+            admin_email: formData.get('cm_admin_email'),
+            admin_password: formData.get('cm_admin_password'),
+            domain: domain
+        };
     }
-    const config = {
-        base_url: formData.get('cm_base_url'),
-        admin_email: formData.get('cm_admin_email'),
-        admin_password: formData.get('cm_admin_password'),
-        domain: domain
-    };
 
     const data = {
         service_type: serviceType,
