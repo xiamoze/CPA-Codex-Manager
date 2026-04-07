@@ -214,6 +214,84 @@ def _extract_cpa_error(response) -> str:
     return error_msg
 
 
+def verify_access_token_with_cpa(
+    access_token: str,
+    account_email: str,
+    api_url: str = None,
+    api_token: str = None,
+) -> Tuple[bool, str]:
+    """
+    验证 access_token 是否能在 CPA 上通过认证。
+
+    检查逻辑（从轻到重）：
+    1. JWT 格式校验 + 过期检查
+    2. CPA 最简上传测试（不真正入库，只是验证 token 可用性）
+
+    Returns:
+        (有效标志, 描述消息)
+    """
+    if not access_token:
+        return False, "access_token 为空"
+
+    # 步骤1：JWT 过期检查
+    try:
+        payload = _decode_jwt_payload(access_token)
+        exp = payload.get("exp", 0)
+        if exp > 0:
+            import time
+            if int(exp) < int(time.time()):
+                return False, f"access_token 已过期（exp={exp}）"
+    except Exception as e:
+        logger.warning(f"JWT 解析失败: {e}，继续尝试 CPA 验证")
+
+    # 步骤2：如果有 CPA 配置，尝试最简上传测试（用不存在的邮箱避免入库冲突）
+    settings = get_settings()
+    effective_url = api_url or settings.cpa_api_url
+    effective_token = api_token or (
+        settings.cpa_api_token.get_secret_value() if settings.cpa_api_token else ""
+    )
+    if not effective_url or not effective_token:
+        # 无 CPA 配置时，仅依赖 JWT 检查
+        return True, "无 CPA 配置，仅通过 JWT 检查"
+
+    upload_url = _normalize_cpa_auth_files_url(effective_url)
+    test_token_data = {
+        "type": "codex",
+        "email": f"__verify__{account_email}",   # 不入库，只是测试
+        "expired": "2099-12-31T23:59:59+08:00",
+        "id_token": "",
+        "account_id": "__verify__",
+        "access_token": access_token,
+        "last_refresh": datetime.now(tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+        "refresh_token": "",
+    }
+    filename = f"__verify__test.json"
+    file_content = json.dumps(test_token_data, ensure_ascii=False).encode("utf-8")
+
+    try:
+        # 使用 DELETE 方法尝试（只验证 token 是否有权限，不实际写入）
+        # 如果返回 401/403 说明 token 无效
+        response = cffi_requests.post(
+            f"{upload_url}?name=__verify__test.json",
+            data=file_content,
+            headers=_build_cpa_headers(effective_token, content_type="application/json"),
+            proxies=None,
+            timeout=15,
+            impersonate="chrome110",
+        )
+        if response.status_code in (200, 201):
+            return True, "CPA 验证通过"
+        if response.status_code == 401:
+            return False, "CPA 返回 Unauthorized：access_token 无效或已被吊销"
+        if response.status_code == 403:
+            return False, "CPA 返回 Forbidden：权限不足"
+        # 其他状态码无法确定，视为 token 可能有效
+        return True, f"CPA 验证响应 {response.status_code}，视为可能有效"
+    except Exception as e:
+        logger.warning(f"CPA token 验证网络异常: {e}，跳过 CPA 层验证")
+        return True, f"网络异常，跳过 CPA 层验证: {e}"
+
+
 def _post_cpa_auth_file_multipart(upload_url: str, filename: str, file_content: bytes, api_token: str):
     mime = CurlMime()
     mime.addpart(

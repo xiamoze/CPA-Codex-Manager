@@ -330,7 +330,6 @@ class RegistrationEngineV2:
                     session_ok, session_result = client.reuse_session_and_get_tokens()
                     if session_ok:
                         self._raise_if_cancelled()
-                        result.success = True
                         result.access_token = session_result.get("access_token", "")
                         result.session_token = session_result.get("session_token", "")
                         result.account_id = (
@@ -353,6 +352,23 @@ class RegistrationEngineV2:
                             "registration_engine": "v2",
                             "browser_mode": self.browser_mode,
                         }
+
+                        # ── Bug 3 Fix: 注册后预验证 CPA token ──────────────────
+                        # 防止 Issue #23/#21：账号"注册成功"但CPA显示Unauthorized
+                        from ...core.upload.cpa_upload import verify_access_token_with_cpa
+                        cpa_verified, cpa_msg = verify_access_token_with_cpa(
+                            access_token=result.access_token,
+                            account_email=result.email,
+                        )
+                        self._log(f"[CPA Token 验证] {cpa_msg}")
+                        if not cpa_verified:
+                            result.success = False
+                            result.error_message = f"CPA Token 验证失败: {cpa_msg}"
+                            self._log(f"⚠️ 账号注册流程完成但 CPA 验证未通过: {cpa_msg}", "warning")
+                            return result
+                        # ── Fix 结束 ───────────────────────────────────────────
+
+                        result.success = True
                         self._log("-" * 40)
                         self._log("注册: 流程执行成功", "success")
                         self._log(f"邮箱账户: {result.email}")
