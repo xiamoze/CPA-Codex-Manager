@@ -3,138 +3,124 @@ name: 🐳 Build & Push Docker Image
 
 on:
   push:
-    branches:
-      - main
-      - master
-    tags:
-      - "v*"
-  # 可选：支持手动触发测试构建
+    branches: [main, master]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       push_image:
-        description: "Push image to registry (disable for dry-run)"
+        description: "Push image to GHCR"
         required: true
         default: "true"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
 
-# 最小权限原则
 permissions:
   contents: read
-  packages: write  # ✅ 推送镜像到 GHCR 必需
-  security-events: write  # ✅ 可选：用于漏洞扫描结果上传
+  packages: write
+  security-events: write
 
-# 全局环境变量
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}  # 自动解析为: ghcr.io/xiamoze/cpa-codex-manager
-  PLATFORMS: linux/amd64,linux/arm64    # 多架构支持（如需单架构可改为: linux/amd64）
+  # 如需支持 arm64 请改为: linux/amd64,linux/arm64
+  PLATFORMS: linux/amd64
 
 jobs:
   build-and-push:
-    name: Build & Push Image
+    name: Build & Publish Image
     runs-on: ubuntu-latest
-    # 仅在推送事件且为 tag/main 时执行
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'workflow_dispatch' || 
+        startsWith(github.ref, 'refs/tags/') || 
+        github.ref == 'refs/heads/main' || 
+        github.ref == 'refs/heads/master'
 
     steps:
-      # ── 1. 检出代码 ─────────────────────────────────────
-      - name: 📦 Checkout Repository
+      - name: 📦 Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取完整历史用于版本注入
+          fetch-depth: 0
 
-      # ── 2. 设置 QEMU（多架构构建必需）────────────────────
+      - name: 🔤 Normalize Image Name
+        id: normalize
+        run: |
+          echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "registry=ghcr.io" >> $GITHUB_OUTPUT
+
       - name: 🔄 Set up QEMU
         if: contains(env.PLATFORMS, 'arm64')
         uses: docker/setup-qemu-action@v3
 
-      # ── 3. 设置 Docker Buildx ──────────────────────────
       - name: 🛠️ Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: |
-            image=moby/buildkit:master
+            image=moby/buildkit:latest
             network=host
 
-      # ── 4. 登录 GitHub Container Registry ───────────────
       - name: 🔐 Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ steps.normalize.outputs.registry }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 5. 提取镜像元数据（自动生成 tags/labels）────────
       - name: 🏷️ Extract Metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.normalize.outputs.registry }}/${{ steps.normalize.outputs.image_name }}
           tags: |
-            # 分支构建: -main, -master
-            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
-            # Tag 构建: v1.2.3, v1.2, v1, latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            # 默认分支自动标记为 latest
+            type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ github.ref_name }}
 
-      # ── 6. 构建并推送镜像 ──────────────────────────────
       - name: 🚀 Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event.inputs.push_image != 'false' }}  # 支持手动干跑测试
+          push: ${{ github.event_name == 'push' || github.event.inputs.push_image == 'true' }}
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ✅ 启用 GitHub Actions 缓存，加速重复构建
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # ✅ 国内构建优化：注入镜像源参数
           build-args: |
             PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
             PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
             APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
-          # ✅ 构建结果摘要输出
-          outputs: type=image,push=true
 
-      # ── 7. （可选）漏洞扫描：Trivy ─────────────────────
+      - name: 🔍 Set Scan Reference
+        id: scan-ref
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n' | head -n 1)
+          echo "ref=$FIRST_TAG" >> $GITHUB_OUTPUT
+
       - name: 🔍 Scan Image for Vulnerabilities
         uses: aquasecurity/trivy-action@master
-        if: always()  # 即使构建失败也尝试扫描（如果镜像存在）
+        if: success()
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          image-ref: ${{ steps.scan-ref.outputs.ref }}
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
+          scan-after-push: true
 
-      # ── 8. （可选）上传扫描结果到 GitHub Security ─────
-      - name: 📊 Upload Trivy Scan Results
+      - name: 📊 Upload Trivy Results
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && steps.meta.outputs.version != ''
+        if: always()
         with:
           sarif_file: "trivy-results.sarif"
           category: "docker-image-scan"
 
-      # ── 9. 输出构建信息（便于调试与审计）──────────────
       - name: 📋 Build Summary
         if: always()
         run: |
           echo "## 🐳 Docker Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags**:" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- `/' | sed 's/$/`/' >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ steps.normalize.outputs.registry }}/${{ steps.normalize.outputs.image_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platforms**: ${{ env.PLATFORMS }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Trigger**: ${{ github.event_name }} @ ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }} / ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
