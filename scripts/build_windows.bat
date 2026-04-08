@@ -1,79 +1,121 @@
 @echo off
-setlocal EnableDelayedExpansion
+rem 强制切换到 UTF-8 代码页，避免 PowerShell/cmd 调用时中文提示乱码
+chcp 65001 >nul
+setlocal enabledelayedexpansion
 
 :: ============================================================
-:: CPA-Codex-Manager Windows 构建脚本
-:: ✅ 兼容 GitHub Actions 与本地开发环境
-:: ✅ 自动适配 CI 传入的 PYTHON_CMD / PIP_CMD
+:: 🔧 CI/本地兼容层：优先读取 Workflow 传入的环境变量
+::    - GitHub Actions 会注入: PYTHON_CMD=python, PIP_CMD=python -m pip
+::    - 本地开发未设置时，自动 fallback 到 py -3
 :: ============================================================
-
-:: 1. 设置命令（优先使用 CI 环境变量，否则 fallback 到系统默认）
-if "%PYTHON_CMD%"=="" set "PYTHON_CMD=python"
-if "%PIP_CMD%"=="" set "PIP_CMD=%PYTHON_CMD% -m pip"
-
-echo [1/5] 清理旧产物...
-if exist "dist" rmdir /s /q "dist"
-if exist "build" rmdir /s /q "build"
-if exist "*.spec" del /q "*.spec" 2>nul
-
-echo [2/5] 检查依赖...
-:: ✅ 关键修复：使用环境变量指定的 Python 命令检测
-%PYTHON_CMD% -c "import PyInstaller" >nul 2>&1
-if errorlevel 1 (
-    echo ⚠️ 未检测到 PyInstaller，正在通过 %PIP_CMD% 安装...
-    %PIP_CMD% install --upgrade pip >nul 2>&1
-    %PIP_CMD% install "pyinstaller==6.11.1" pillow
-    if errorlevel 1 (
-        echo ❌ PyInstaller 安装失败，请检查网络或 pip 配置
-        exit /b 1
-    )
+if defined PYTHON_CMD (
+    set "PY_CMD=%PYTHON_CMD%"
+) else (
+    set "PY_CMD=py -3"
 )
-echo ✅ PyInstaller 已就绪
+if defined PIP_CMD (
+    set "PIP_CMD=%PIP_CMD%"
+) else (
+    set "PIP_CMD=%PY_CMD% -m pip"
+)
 
-echo [3/5] 获取版本信息...
-set "BUILD_VERSION=%APP_VERSION%"
-if "%BUILD_VERSION%"=="" set "BUILD_VERSION=1.0.0-dev"
-:: 移除可能的 'v' 前缀
-if /i "%BUILD_VERSION:~0,1%"=="v" set "BUILD_VERSION=%BUILD_VERSION:~1%"
-echo 📦 构建版本: !BUILD_VERSION!
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 
-echo [4/5] 开始 PyInstaller 构建...
+set "APP_NAME=CPA-Codex-Manager"
+set "DIST_DIR=%PROJECT_ROOT%\dist"
+set "BUILD_DIR=%PROJECT_ROOT%\build"
+set "SPEC_FILE=%PROJECT_ROOT%\CPA-Codex-Manager-Desktop.spec"
 set "BUILD_MODE=%~1"
-if "%BUILD_MODE%"=="" set "BUILD_MODE=onedir"
+if not defined BUILD_MODE set "BUILD_MODE=onefile"
+set "BUILD_MODE=%BUILD_MODE:"=%"
+if /I not "%BUILD_MODE%"=="onefile" if /I not "%BUILD_MODE%"=="onedir" (
+  echo 用法: %~n0 [onefile^|onedir]
+  exit /b 1
+)
+set "ICON_ICO=%PROJECT_ROOT%\assets\icon.ico"
+set "ICON_PNG=%PROJECT_ROOT%\assets\icon.png"
+set "ICON_JPG=%PROJECT_ROOT%\assets\icon.jpg"
+set "ICON_SOURCE="
+set "OUTPUT_HINT=%DIST_DIR%\%APP_NAME%.exe"
 
-:: 拼接 PyInstaller 参数（Windows 路径分隔符为 ;）
-set "PYI_ARGS=--name=CPA-Codex-Manager"
-set "PYI_ARGS=!PYI_ARGS! --add-data config;config"
-set "PYI_ARGS=!PYI_ARGS! --hidden-import=pkg_resources.py2_warn"
-set "PYI_ARGS=!PYI_ARGS! --hidden-import=charset_normalizer.md__mypyc"
-if /i "%BUILD_MODE%"=="onefile" (
-    set "PYI_ARGS=!PYI_ARGS! --onefile --icon=assets/icon.ico"
-) else (
-    set "PYI_ARGS=!PYI_ARGS! --onedir --windowed --icon=assets/icon.ico"
+if /I "%BUILD_MODE%"=="onedir" (
+  set "OUTPUT_HINT=%DIST_DIR%\%APP_NAME%\%APP_NAME%.exe"
 )
 
-:: 执行构建
-echo 🔨 执行命令: %PYTHON_CMD% -m PyInstaller !PYI_ARGS! webui.py
-%PYTHON_CMD% -m PyInstaller !PYI_ARGS! webui.py
-if errorlevel 1 (
-    echo ❌ PyInstaller 构建失败，请检查上方日志
+echo [1/5] 清理旧产物
+if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+
+echo [2/5] 检查依赖
+echo ✅ 使用 Python: %PY_CMD% | pip: %PIP_CMD%
+
+%PY_CMD% -m PyInstaller --version >nul 2>&1 || (
+  echo ⚠️ 未检测到 PyInstaller，正在通过 %PIP_CMD% 安装...
+  %PIP_CMD% install --upgrade pip >nul 2>&1
+  %PIP_CMD% install pyinstaller
+  if errorlevel 1 (
+    echo ❌ PyInstaller 安装失败
     exit /b 1
+  )
 )
 
-echo [5/5] 验证产物...
-if /i "%BUILD_MODE%"=="onefile" (
-    if not exist "dist\CPA-Codex-Manager.exe" (
-        echo ❌ 未找到预期文件: dist\CPA-Codex-Manager.exe
-        exit /b 1
-    )
-    echo ✅ 构建成功: dist\CPA-Codex-Manager.exe
+%PY_CMD% -c "import webview" >nul 2>&1 || (
+  echo ❌ 未检测到 pywebview，请先在项目根目录执行: %PIP_CMD% install -e .
+  exit /b 1
+)
+
+if not exist "%ICON_ICO%" (
+  if exist "%ICON_JPG%" (
+    set "ICON_SOURCE=%ICON_JPG%"
+  ) else if exist "%ICON_PNG%" (
+    set "ICON_SOURCE=%ICON_PNG%"
+  )
+
+  if defined ICON_SOURCE (
+    echo 未找到 assets\icon.ico，尝试根据图标源文件自动生成...
+    %PY_CMD% -c "from PIL import Image" >nul 2>&1 || %PIP_CMD% install pillow
+    %PY_CMD% "%PROJECT_ROOT%\scripts\generate_windows_icon.py" "!ICON_SOURCE!" "%ICON_ICO%"
+  ) else (
+    echo ⚠️ 未找到 assets\icon.ico / icon.jpg / icon.png，将使用默认 EXE 图标。
+  )
+)
+
+echo [3/5] 构建 Windows EXE ^(模式: %BUILD_MODE%^)
+cd /d "%PROJECT_ROOT%"
+%PY_CMD% -m PyInstaller --noconfirm --clean "%SPEC_FILE%"
+if errorlevel 1 (
+  echo ❌ PyInstaller 构建失败，请检查上方日志
+  exit /b 1
+)
+
+if /I "%BUILD_MODE%"=="onedir" (
+  echo [4/5] 打包便携分发 ZIP
+  powershell -NoProfile -Command "Compress-Archive -Path '%DIST_DIR%\%APP_NAME%\*' -DestinationPath '%DIST_DIR%\%APP_NAME%-windows-portable.zip' -Force"
+  if errorlevel 1 exit /b 1
+  set "OUTPUT_HINT=%DIST_DIR%\%APP_NAME%-windows-portable.zip"
 ) else (
-    if not exist "dist\CPA-Codex-Manager\CPA-Codex-Manager.exe" (
-        echo ❌ 未找到预期文件: dist\CPA-Codex-Manager\CPA-Codex-Manager.exe
-        exit /b 1
-    )
-    echo ✅ 构建成功: dist\CPA-Codex-Manager\
+  echo [4/5] onefile 模式无需额外封装
 )
 
-echo 🎉 全部完成！
+echo [5/5] 完成
+if exist "%OUTPUT_HINT%" (
+  echo 📦 输出: %OUTPUT_HINT%
+) else if exist "%DIST_DIR%\%APP_NAME%\%APP_NAME%.exe" (
+  echo 📦 EXE: %DIST_DIR%\%APP_NAME%\%APP_NAME%.exe
+) else if exist "%DIST_DIR%\%APP_NAME%.exe" (
+  echo 📦 EXE: %DIST_DIR%\%APP_NAME%.exe
+) else if exist "%DIST_DIR%\%APP_NAME%" (
+  echo 📦 目录: %DIST_DIR%\%APP_NAME%
+) else (
+  echo ❌ 请检查 dist 目录中的输出文件。
+  exit /b 1
+)
+
+echo.
+echo 💡 分发建议:
+echo    - 默认 onefile: 直接发送 %APP_NAME%.exe，更适合普通用户。
+echo    - onedir: 发送自动生成的 portable.zip，避免用户漏拷 _internal。
+echo    - 如需正式安装包，可再用 Inno Setup / NSIS 对上述产物二次封装。
+
 exit /b 0
