@@ -13,11 +13,13 @@ from .base import (
 from .tempmail import TempmailService
 from .cloud_mail import CloudMailService
 from .freemail import FreemailService
+from .cloudflare_temp import CloudflareTempService
 
 # 注册核心服务
 EmailServiceFactory.register(EmailServiceType.TEMPMAIL, TempmailService)
 EmailServiceFactory.register(EmailServiceType.CLOUD_MAIL, CloudMailService)
 EmailServiceFactory.register(EmailServiceType.FREEMAIL, FreemailService)
+EmailServiceFactory.register(EmailServiceType.CLOUDFLARE_TEMP, CloudflareTempService)
 
 __all__ = [
     # 基类
@@ -31,4 +33,5 @@ __all__ = [
     'TempmailService',
     'CloudMailService',
     'FreemailService',
+    'CloudflareTempService',
 ]

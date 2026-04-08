@@ -35,6 +35,7 @@ class EmailServiceType(str, Enum):
     TEMPMAIL = "tempmail"
     CLOUD_MAIL = "cloud_mail"
     FREEMAIL = "freemail"
+    CLOUDFLARE_TEMP = "cloudflare_temp"
 
 
 # ============================================================================
@@ -113,6 +114,15 @@ EMAIL_SERVICE_DEFAULTS = {
         "timeout": 30,
         "poll_interval": 3,
         "mail_limit": 20,
+    },
+    "cloudflare_temp": {
+        "base_url": "https://tml.yltkj.ggff.net",
+        "domain": "yltkj.ggff.net",
+        "timeout": 30,
+        "poll_interval": 3,
+        "mail_limit": 20,
+        "max_retries": 3,
+        "retry_delay": 1,
     }
 }
 

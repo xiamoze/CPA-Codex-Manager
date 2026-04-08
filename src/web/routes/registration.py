@@ -184,6 +184,12 @@ def _normalize_email_service_config(
     elif service_type == EmailServiceType.FREEMAIL:
         if 'adminToken' in normalized and 'admin_token' not in normalized:
             normalized['admin_token'] = normalized.pop('adminToken')
+    elif service_type == EmailServiceType.CLOUDFLARE_TEMP:
+        # Cloudflare 临时邮箱支持 name 和 domain
+        if 'default_domain' in normalized and 'domain' not in normalized:
+            normalized['domain'] = normalized.pop('default_domain')
+        if 'cfToken' in normalized and 'cf_token' not in normalized:
+            normalized['cf_token'] = normalized.pop('cfToken')
 
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
