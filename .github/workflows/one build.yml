@@ -1,3 +1,4 @@
+# .github/workflows/build-desktop.yml
 name: Build Desktop Artifacts
 
 on:
@@ -16,49 +17,54 @@ env:
   PYINSTALLER_VERSION: "6.11.1"
 
 jobs:
- build-windows:
-  name: Build Windows
-  runs-on: windows-latest
-  steps:
-    - name: 📦 Checkout
-      uses: actions/checkout@v4
+  # ✅ 修复：统一使用 2 空格缩进
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史用于版本注入
 
-    - name: 🐍 Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-        cache: "pip"
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
-    - name: 📦 Install Dependencies
-      shell: pwsh
-      run: |
-        python -m pip install --upgrade pip setuptools wheel
-        python -m pip install -e .
-        # ✅ 显式安装 pyinstaller 到当前环境
-        python -m pip install "pyinstaller==6.11.1" pillow
+      - name: 📦 Install Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e .
+          python -m pip install "pyinstaller==${{ env.PYINSTALLER_VERSION }}" pillow
 
-    - name: 🔨 Build Windows Artifact
-      shell: cmd
-      env:
-        PYTHON_CMD: python      # ✅ 关键：与 setup-python 一致
-        PIP_CMD: python -m pip
-        APP_VERSION: ${{ github.ref_name }}  # 注入版本
-      run: scripts\build_windows.bat onefile
+      - name: 🔨 Build Windows Artifact
+        shell: cmd
+        env:
+          PYTHON_CMD: python
+          PIP_CMD: python -m pip
+          APP_VERSION: ${{ github.ref_name }}
+        run: scripts\build_windows.bat onefile
 
-    - name: 📤 Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: CPA-Codex-Manager-windows
-        path: |
-          dist/CPA-Codex-Manager.exe
-          dist/CPA-Codex-Manager/*.exe
-        if-no-files-found: error
-        retention-days: 7
+      - name: 📤 Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: |
+            dist/${{ env.APP_NAME }}.exe
+            dist/${{ env.APP_NAME }}/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: 🚀 Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # ✅ 最小权限：仅 release 任务需要写权限
 
     steps:
       - name: 📥 Download Windows Artifact
@@ -85,5 +91,49 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') }}
+          generate_release_notes: false  # ✅ 使用自定义 changelog
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # ── 追加到 jobs: 末尾 ─────────────────────────────
+  build-docker:
+    name: 🐳 Build & Push Docker Image
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main')
+    needs: [build-windows]  # 可选：桌面版成功后再构建镜像
+    permissions:
+      packages: write  # ✅ GHCR 推送必需
+
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔐 Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository | lower }}  # ✅ 小写镜像名
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🚀 Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+            APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
