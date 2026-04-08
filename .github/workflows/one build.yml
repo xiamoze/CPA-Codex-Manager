@@ -16,7 +16,7 @@ env:
   PYINSTALLER_VERSION: "6.11.1"
 
 jobs:
-build-windows:
+ build-windows:
   name: Build Windows
   runs-on: windows-latest
   steps:
